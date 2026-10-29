@@ -35,4 +35,3 @@ The title bar shows `LAN <your IP>` when on the network, or `THIS COMPUTER ONLY`
 1. **macOS Local Network permission** — System Settings → Privacy & Security → **Local Network** → turn on your terminal app (Terminal, iTerm, …). Restart the terminal and Comms.
 2. **macOS firewall** — System Settings → Network → Firewall. If on, allow incoming connections for Python (or turn off "Block all incoming connections").
 3. **Same network** — both IPs in the title bar should start the same way (e.g. `192.168.0.x`). Guest Wi-Fi and networks with "client/AP isolation" block devices from talking to each other.
-- Messages are not encrypted and are not stored — you only see messages sent while you're running the app.
