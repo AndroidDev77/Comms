@@ -41,9 +41,17 @@ MAX_HISTORY = 5000        # messages kept in memory for scrollback
 # Networking
 # --------------------------------------------------------------------------- #
 
+LOCAL_NETWORK_HINT = (
+    "On macOS, open System Settings > Privacy & Security > Local Network, "
+    "turn on your terminal app (Terminal, iTerm, ...), then restart Comms."
+)
+
+
 class Network:
     def __init__(self):
         self.client_id = uuid.uuid4().hex
+        self.local_only = False
+        self.warning = None     # set when we can't reach the network
         self.sock = self._make_socket()
 
     def _make_socket(self):
@@ -52,6 +60,7 @@ class Network:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if hasattr(socket, "SO_REUSEPORT"):
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         sock.bind(("", PORT))
 
         sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, TTL)
@@ -61,13 +70,17 @@ class Network:
         try:
             mreq = struct.pack("4s4s", socket.inet_aton(GROUP), socket.inet_aton("0.0.0.0"))
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-        except OSError:
+        except OSError as e:
             # No usable network interface: fall back to this computer only.
-            self._use_loopback(sock)
+            self._use_loopback(sock, e)
         return sock
 
-    @staticmethod
-    def _use_loopback(sock):
+    def _use_loopback(self, sock, error):
+        if self.local_only:
+            return
+        self.local_only = True
+        self.warning = (f"Can't reach the network ({error}). Chatting with this "
+                        f"computer only. {LOCAL_NETWORK_HINT}")
         lo = socket.inet_aton("127.0.0.1")
         mreq = struct.pack("4s4s", socket.inet_aton(GROUP), lo)
         try:
@@ -81,15 +94,28 @@ class Network:
             "app": "comms",
             "kind": kind,
             "id": self.client_id,
+            "mid": uuid.uuid4().hex,  # lets receivers drop duplicate copies
             "user": user,
             "text": text[:MAX_TEXT],
             "ts": time.time(),
         }).encode("utf-8")
-        try:
+
+        if self.local_only:
             self.sock.sendto(packet, (GROUP, PORT))
-        except OSError:
-            # e.g. "No route to host" when there's no network; retry locally.
-            self._use_loopback(self.sock)
+            return
+
+        # Send both multicast and broadcast: many home routers drop one or the other.
+        sent, error = False, None
+        for dest in (GROUP, "255.255.255.255"):
+            try:
+                self.sock.sendto(packet, (dest, PORT))
+                sent = True
+            except OSError as e:
+                error = e
+        if not sent:
+            # e.g. "No route to host": no network, or macOS Local Network
+            # permission denied. Keep working locally but tell the user.
+            self._use_loopback(self.sock, error)
             self.sock.sendto(packet, (GROUP, PORT))
 
     def listen(self, inbox):
@@ -124,6 +150,8 @@ class ChatUI:
         self.username = username
         self.inbox = queue.Queue()
         self.messages = []      # list of (color_pair, text)
+        self.seen = {}          # message ids already shown (insertion-ordered)
+        self.warned = False
         self.scroll = 0         # lines scrolled up from the bottom
         self.input = ""
         self.cursor = 0
@@ -154,6 +182,14 @@ class ChatUI:
             self.scroll += len(self.wrap(text))
 
     def handle(self, msg):
+        # Each message arrives twice (multicast + broadcast); show it once.
+        mid = msg.get("mid")
+        if mid:
+            if mid in self.seen:
+                return
+            self.seen[mid] = True
+            if len(self.seen) > MAX_HISTORY:
+                del self.seen[next(iter(self.seen))]
         try:
             stamp = datetime.fromtimestamp(float(msg.get("ts"))).strftime("%H:%M:%S")
         except (TypeError, ValueError, OverflowError, OSError):
@@ -171,6 +207,9 @@ class ChatUI:
             self.add(3, f"[{stamp}] *** {user} left the chat")
 
     def drain_inbox(self):
+        if self.net.warning and not self.warned:
+            self.warned = True
+            self.add(3, f"*** WARNING: {self.net.warning}")
         changed = False
         while True:
             try:
@@ -200,7 +239,8 @@ class ChatUI:
         h, w = curses.LINES, curses.COLS
         bar = curses.color_pair(4) if curses.has_colors() else curses.A_REVERSE
 
-        title = f" Comms - you are {self.username} "
+        where = "THIS COMPUTER ONLY" if self.net.local_only else f"LAN {local_ip()}"
+        title = f" Comms - you are {self.username} - {where} "
         self.scr.addnstr(0, 0, title.ljust(w), w - 1, bar)
 
         lines = self.all_lines()
@@ -311,6 +351,24 @@ class ChatUI:
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
+
+_local_ip = None
+
+
+def local_ip():
+    """This computer's LAN address, shown in the title bar to help troubleshooting."""
+    global _local_ip
+    if _local_ip is None:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("10.255.255.255", 1))  # no packet is sent; just picks a route
+            _local_ip = s.getsockname()[0]
+        except OSError:
+            _local_ip = "no network"
+        finally:
+            s.close()
+    return _local_ip
+
 
 def ask_username():
     while True:

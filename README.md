@@ -25,6 +25,14 @@ Enter a username when asked, then start typing. On Windows, first run `pip insta
 
 ## Notes
 
-- Uses UDP multicast (`239.255.42.99:50999`, TTL 1), so messages stay on the local network.
-- Your firewall must allow UDP port 50999 for chatting between computers. Some guest/corporate Wi-Fi networks block multicast.
+- Sends each message by UDP multicast (`239.255.42.99:50999`, TTL 1) and UDP broadcast, so messages stay on the local network.
+- Messages are not encrypted and are not stored — you only see messages sent while you're running the app.
+
+## Troubleshooting (not seeing messages from another computer)
+
+The title bar shows `LAN <your IP>` when on the network, or `THIS COMPUTER ONLY` if it couldn't reach it.
+
+1. **macOS Local Network permission** — System Settings → Privacy & Security → **Local Network** → turn on your terminal app (Terminal, iTerm, …). Restart the terminal and Comms.
+2. **macOS firewall** — System Settings → Network → Firewall. If on, allow incoming connections for Python (or turn off "Block all incoming connections").
+3. **Same network** — both IPs in the title bar should start the same way (e.g. `192.168.0.x`). Guest Wi-Fi and networks with "client/AP isolation" block devices from talking to each other.
 - Messages are not encrypted and are not stored — you only see messages sent while you're running the app.
